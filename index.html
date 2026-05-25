@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>BuildEasy Uganda</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="index.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+
+<!-- ══ FIREBASE SDK (v10 modular via CDN) ══════════════════ -->
+<script type="module">
+import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import{getFirestore,collection,doc,setDoc,getDoc,getDocs,addDoc,updateDoc,query,where,orderBy,serverTimestamp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import{getStorage,ref,uploadBytes,getDownloadURL}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBp48QiSL7mG5mFkByAxDihdetyZ1FWhGw",
+  authDomain: "buildeasy---uganda-c164b.firebaseapp.com",
+  projectId: "buildeasy---uganda-c164b",
+  storageBucket: "buildeasy---uganda-c164b.firebasestorage.app",
+  messagingSenderId: "932079087101",
+  appId: "1:932079087101:web:3db87ea445a79ec01e3d94",
+  measurementId: "G-E8PXX8SKZV"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const storage = getStorage(app);
+
+function phoneKey(p){return p.replace(/\D/g,'')}
+
+/* ── AUTH ─────────────────────────────────── */
+async function signupUser(name,phone,location,category,trade){
+  const key=phoneKey(phone);
+  const snap=await getDoc(doc(db,'users',key));
+  if(snap.exists()&&snap.data().name.toLowerCase()===name.toLowerCase()){
+    window._showToast('Account already exists','warn');return;
+  }
+  const data={name,phone,location,category,trade:trade||'',
+    status:category==='artisan'?'Free for Work':'',
+    experience:'',picUrl:'',portfolio:[],
+    bizName:'',branches:'',profileComplete:false,
+    createdAt:serverTimestamp()};
+  await setDoc(doc(db,'users',key),data);
+  window._loginUser({id:key,...data});
+}
+
+async function loginUser_check(name,phone){
+  const key=phoneKey(phone);
+  const snap=await getDoc(doc(db,'users',key));
+  if(!snap.exists()||snap.data().name.toLowerCase()!==name.toLowerCase()){
+    window._showToast("Account doesn't exist. Please sign up",'error');return;
+  }
+  window._loginUser({id:key,...snap.data()});
+}
+
+async function updateUser(fields){
+  if(!window._currentUser)return;
+  await updateDoc(doc(db,'users',window._currentUser.id),fields);
+  window._currentUser={...window._currentUser,...fields};
+}
+
+async function uploadImage(file,path){
+  window._showLoader('Uploading image...');
+  const r=ref(storage,path);
+  await uploadBytes(r,file);
+  const url=await getDownloadURL(r);
+  window._hideLoader();
+  return url;
+}
+
+async function getArtisans(trade=''){
+  let q=trade
+    ?query(collection(db,'users'),where('category','==','artisan'),where('trade','==',trade))
+    :query(collection(db,'users'),where('category','==','artisan'));
+  const snap=await getDocs(q);
+  return snap.docs.map(d=>({id:d.id,...d.data()}));
+}
+
+async function addProductDb(data){
+  const ref2=await addDoc(collection(db,'products'),{...data,createdAt:serverTimestamp()});
+  return ref2.id;
+}
+
+async function getProducts(search=''){
+  const snap=await getDocs(collection(db,'products'));
+  let p=snap.docs.map(d=>({id:d.id,...d.data()}));
+  if(search)p=p.filter(x=>x.name.toLowerCase().includes(search.toLowerCase())||(x.desc||'').toLowerCase().includes(search.toLowerCase()));
+  return p;
+}
+
+async function getMyProducts(supplierId){
+  const q=query(collection(db,'products'),where('supplierId','==',supplierId));
+  const snap=await getDocs(q);
+  return snap.docs.map(d=>({id:d.id,...d.data()}));
+}
+
+async function toggleStockDb(pid,currentStock){
+  await updateDoc(doc(db,'products',pid),{stock:currentStock==='In Stock'?'Out of Stock':'In Stock'});
+}
+
+async function addReview(data){
+  await addDoc(collection(db,'reviews'),{...data,createdAt:serverTimestamp()});
+}
+
+async function getReviewsDb(){
+  try{
+    const q=query(collection(db,'reviews'),orderBy('createdAt','desc'));
+    const snap=await getDocs(q);
+    return snap.docs.map(d=>({id:d.id,...d.data()}));
+  }catch{
+    const snap=await getDocs(collection(db,'reviews'));
+    return snap.docs.map(d=>({id:d.id,...d.data()}));
+  }
+}
+
+async function saveOrder(data){
+  return await addDoc(collection(db,'orders'),{...data,createdAt:serverTimestamp()});
+}
+
+/* ── EXPOSE TO GLOBAL ────────────────────── */
+window._fb={
+  signupUser,loginUser_check,updateUser,uploadImage,
+  getArtisans,addProductDb,getProducts,getMyProducts,
+  toggleStockDb,addReview,getReviewsDb,saveOrder
+};
+window._firebaseReady=true;
+document.dispatchEvent(new Event('firebase-ready'));
+console.log('%cBuildEasy Firebase ✓','color:#e8860a;font-weight:bold;font-size:14px');
+</script>
+
+</head>
+<body>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- ════════════════════════════════════════════════════
+     NAV
+════════════════════════════════════════════════════ -->
+<nav class="nav" id="main-nav">
+  <div class="nav-logo" onclick="goTo('landing')">
+    <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 80'%3E%3C/svg%3E" alt="BuildEasy" id="nav-logo-img" style="height:40px;display:none"/>
+    <div class="nav-logo-text"><img src="Be.png" alt=""></div>
+  </div>
+  <div class="nav-links" id="nav-links-public">
+    <span class="nav-link always" onclick="goTo('landing')">Home</span>
+    <span class="nav-link always" onclick="scrollToSection('research')">Research</span>
+    <button class="nav-btn outline" onclick="goTo('login')">Log In</button>
+    <button class="nav-btn" onclick="goTo('signup')">Sign Up</button>
+  </div>
+  <div class="nav-links" id="nav-links-user" style="display:none">
+    <span class="nav-link always" onclick="goToDashboard()">Dashboard</span>
+    <span class="nav-link always" onclick="goTo('shop')">Materials</span>
+    <div class="cart-badge-wrap nav-link always" onclick="goTo('cart')" style="cursor:pointer">
+      🛒 Cart <span class="cart-count" id="cart-count">0</span>
+    </div>
+    <div class="user-chip" onclick="goToDashboard()">
+      <div class="user-avatar" id="nav-avatar">U</div>
+      <span id="nav-username">User</span>
+    </div>
+    <button class="nav-btn outline" onclick="logout()">Log Out</button>
+  </div>
+</nav>
+
+<!-- ════════════════════════════════════════════════════
+     LANDING PAGE
+════════════════════════════════════════════════════ -->
+<div class="page active" id="page-landing">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="container">
+      <div class="hero-content">
+        <div class="hero-eyebrow">🇺🇬 Uganda's #1 Construction Platform</div>
+        <h1>Build With<br><span>Confidence.</span></h1>
+        <p class="hero-sub">BuildEasy connects homeowners and clients with verified engineers, artisans, and hardware suppliers across Uganda. Get quotes, book professionals, and source materials — all in one place.</p>
+        <div class="hero-btns">
+          <button class="btn btn-orange btn-lg" onclick="goTo('signup')">Get Started Free</button>
+          <button class="btn btn-outline btn-lg" style="border-color:rgba(255,255,255,0.4);color:white" onclick="document.getElementById('how-it-works').scrollIntoView({behavior:'smooth'})">How It Works</button>
+        </div>
+        <div class="hero-stats">
+          <div><div class="hero-stat-num">500+</div><div class="hero-stat-label">Verified Artisans</div></div>
+          <div><div class="hero-stat-num">10+</div><div class="hero-stat-label">Districts</div></div>
+          <div><div class="hero-stat-num">24h</div><div class="hero-stat-label">Response Time</div></div>
+          <div><div class="hero-stat-num">Free</div><div class="hero-stat-label">To Join</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HOW IT WORKS -->
+  <div class="section" id="how-it-works" style="background:var(--surface)">
+    <div class="container">
+      <div class="text-center mb-2">
+        <div class="section-label">How It Works</div>
+        <div class="section-title">Three simple steps to build</div>
+        <p class="section-sub text-center" style="margin:0 auto">No middlemen, no guesswork. Direct connections to verified professionals and trusted suppliers.</p>
+      </div>
+      <div class="grid-3 mt-4">
+        <div class="step-card"><div class="step-num">1</div><h4>Sign Up</h4><p>Create your free account as a homeowner, artisan, or hardware supplier in under 2 minutes.</p></div>
+        <div class="step-card"><div class="step-num">2</div><h4>Connect</h4><p>Post your project or browse verified professionals. Filter by trade, location, and availability.</p></div>
+        <div class="step-card"><div class="step-num">3</div><h4>Build</h4><p>Book directly via WhatsApp, source your materials, and track everything in one dashboard.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WHO IS BUILDEASY FOR -->
+  <div class="section">
+    <div class="container">
+      <div class="text-center mb-2">
+        <div class="section-label">Who Is BuildEasy For?</div>
+        <div class="section-title">Pick your role and get started</div>
+      </div>
+      <div class="grid-3 mt-4">
+        <div class="category-card">
+          <div class="category-card-top">
+            <div class="cat-icon"><i class="fas fa-house"></i></div>
+            <h3>Homeowners & Clients</h3>
+            <p>Looking to build, renovate, or repair? Post your project and get matched with verified artisans near you. Browse materials and get transparent quotes.</p>
+          </div>
+          <div class="category-card-bottom">
+            <button class="btn btn-orange" onclick="goTo('signup')">Sign Up as Homeowner</button>
+          </div>
+        </div>
+        <div class="category-card">
+          <div class="category-card-top">
+            <div class="cat-icon"><i class="fas fa-helmet-safety"></i></div>
+            <h3>Artisans & Contractors</h3>
+            <p>Plumbers, electricians, builders, welders, carpenters, painters — join our verified network and get more jobs directly on your WhatsApp.</p>
+          </div>
+          <div class="category-card-bottom">
+            <button class="btn btn-navy" onclick="goTo('signup')">Sign Up as Artisan</button>
+          </div>
+        </div>
+        <div class="category-card">
+          <div class="category-card-top">
+            <div class="cat-icon"><i class="fa-solid fa-trowel-bricks"></i></div>
+            <h3>Hardware Suppliers</h3>
+            <p>List your building materials and tools, manage your inventory, and receive orders directly. Reach thousands of builders across Uganda.</p>
+          </div>
+          <div class="category-card-bottom">
+            <button class="btn btn-orange" onclick="goTo('signup')">Sign Up as Supplier</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- REVIEWS -->
+  <div class="section" style="background:var(--surface)">
+    <div class="container">
+      <div class="flex-between mb-2">
+        <div>
+          <div class="section-label">Community Reviews</div>
+          <div class="section-title">What would make BuildEasy better?</div>
+        </div>
+        <button class="btn btn-orange" onclick="openModal('review-modal')">Leave a Review</button>
+      </div>
+      <div class="grid-3 mt-3" id="reviews-list">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- RESEARCH SECTION -->
+  <div class="section" id="research">
+    <div class="container">
+      <div style="background:linear-gradient(135deg,var(--navy),var(--navy-light));border-radius:20px;padding:3rem;color:white;text-align:center">
+        <div style="font-size:12px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:var(--orange-light);margin-bottom:0.5rem">Market Research</div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-size:32px;font-weight:800;margin-bottom:0.75rem">Help Us Build Better</div>
+        <p style="color:rgba(255,255,255,0.7);max-width:520px;margin:0 auto 2rem;line-height:1.7;font-size:15px">Whether you're a homeowner, artisan, or hardware supplier — your insights are shaping the future of construction in Uganda. Fill out our short research survey (3–5 mins).</p>
+        <div style="display:flex;gap:1rem;justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-orange btn-lg" onclick="openResearchModal('customer')">Homeowner Survey</button>
+          <button class="btn" style="background:rgba(255,255,255,0.15);color:white;padding:14px 32px;font-size:17px" onclick="openResearchModal('artisan')">Artisan Survey</button>
+          <button class="btn" style="background:rgba(255,255,255,0.15);color:white;padding:14px 32px;font-size:17px" onclick="openResearchModal('hardware')">Supplier Survey</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <h3>Build<span>Easy</span> Uganda</h3>
+          <p>Connecting homeowners, artisans, and hardware suppliers across Uganda. Building smarter, together.</p>
+        </div>
+        <div>
+          <h4>Platform</h4>
+          <span class="footer-link" onclick="goTo('signup')">Sign Up</span>
+          <span class="footer-link" onclick="goTo('login')">Log In</span>
+          <span class="footer-link" onclick="goTo('shop')">Materials Shop</span>
+          <span class="footer-link" onclick="scrollToSection('research')">Research</span>
+        </div>
+        <div>
+          <h4>For Professionals</h4>
+          <span class="footer-link" onclick="goTo('signup')">Join as Artisan</span>
+          <span class="footer-link" onclick="goTo('signup')">Join as Supplier</span>
+        </div>
+        <div>
+          <h4>Support</h4>
+          <span class="footer-link" onclick="openModal('care-modal')">
+            <i class="fas fa-phone"></i> Customer Care</span>
+          <span class="footer-link" onclick="openModal('review-modal')"><i class="fas fa-envelope"></i> Leave Feedback</span>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 BuildEasy Uganda. All rights reserved.</span>
+        <span>Kampala, Uganda</span>
+      </div>
+    </div>
+  </footer>
+</div><!-- /landing -->
+
+<!-- ════════════════════════════════════════════════════
+     SIGN UP PAGE
+════════════════════════════════════════════════════ -->
+<div class="page" id="page-signup">
+  <div class="section" style="min-height:calc(100vh - 64px);background:var(--surface)">
+    <div class="container-sm">
+      <div class="card">
+        <div class="card-body" style="padding:2.5rem">
+          <div class="text-center mb-2">
+            <div class="section-label">Join BuildEasy</div>
+            <div class="section-title">Create Your Account</div>
+          </div>
+
+          <div class="form-group mt-3">
+            <label>Full Name *</label>
+            <input class="form-control" id="su-name" type="text" placeholder="e.g. John Ssekandi">
+          </div>
+          <div class="form-group">
+            <label>WhatsApp / Phone Number *</label>
+            <input class="form-control" id="su-phone" type="tel" placeholder="e.g. 0701234567">
+            <div class="form-hint">WhatsApp preferred — this will be your login contact</div>
+          </div>
+          <div class="form-group">
+            <label>Location / District *</label>
+            <select class="form-control" id="su-location">
+              <option value="">Select your district</option>
+              <option>Kampala</option><option>Wakiso</option><option>Mukono</option>
+              <option>Jinja</option><option>Mbarara</option><option>Gulu</option>
+              <option>Lira</option><option>Entebbe</option><option>Masaka</option>
+              <option>Fort Portal</option><option>Mbale</option><option>Other</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Category *</label>
+            <select class="form-control" id="su-category" onchange="onCategoryChange()">
+              <option value="">Select your role</option>
+              <option value="customer">Customer / Homeowner / Client</option>
+              <option value="artisan">Contractor / Artisan</option>
+              <option value="hardware">Hardware Owner / Building Material Supplier</option>
+            </select>
+          </div>
+          <div class="form-group" id="su-trade-wrap" style="display:none">
+            <label>Your profession / Specialty *</label>
+            <select class="form-control" id="su-trade">
+              <option value="">Select trade</option>
+              <option>Plumber</option><option>Electrician</option><option>Builder / Mason</option>
+              <option>Welder</option><option>Carpenter</option><option>Painter</option>
+              <option>Civil / Structural Engineer</option><option>Other</option>
+            </select>
+          </div>
+
+          <button class="btn btn-orange btn-full mt-3" style="padding:14px" onclick="doSignup()">Create Account</button>
+          <p style="text-align:center;font-size:14px;color:var(--text-soft);margin-top:1rem">
+            Already have an account? <span style="color:var(--orange);font-weight:700;cursor:pointer" onclick="goTo('login')">Log In</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- /signup -->
+
+<!-- ════════════════════════════════════════════════════
+     LOG IN PAGE
+════════════════════════════════════════════════════ -->
+<div class="page" id="page-login">
+  <div class="section" style="min-height:calc(100vh - 64px);background:var(--surface)">
+    <div class="container-sm" style="max-width:480px">
+      <div class="card">
+        <div class="card-body" style="padding:2.5rem">
+          <div class="text-center mb-2">
+            <div class="section-label">Welcome Back</div>
+            <div class="section-title">Log In</div>
+          </div>
+          <div class="form-group mt-3">
+            <label>Full Name *</label>
+            <input class="form-control" id="li-name" type="text" placeholder="e.g. John Ssekandi">
+          </div>
+          <div class="form-group">
+            <label>WhatsApp / Phone Number *</label>
+            <input class="form-control" id="li-phone" type="tel" placeholder="e.g. 0701234567">
+          </div>
+          <button class="btn btn-orange btn-full mt-3" style="padding:14px" onclick="doLogin()">Log In</button>
+          <p style="text-align:center;font-size:14px;color:var(--text-soft);margin-top:1rem">
+            Don't have an account? <span style="color:var(--orange);font-weight:700;cursor:pointer" onclick="goTo('signup')">Sign Up</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- /login -->
+
+<!-- ════════════════════════════════════════════════════
+     CUSTOMER DASHBOARD
+════════════════════════════════════════════════════ -->
+<div class="page" id="page-customer">
+  <div class="dash-layout">
+    <div class="dash-sidebar">
+      <div class="dash-sidebar-name">
+        <h3 id="cust-sidebar-name">My Account</h3>
+        <p>Homeowner / Client</p>
+      </div>
+      <div class="sidebar-link active" onclick="switchTab('cust','overview')"><span class="icon"><i class="fas fa-house"></i></span> Overview</div>
+      <div class="sidebar-link" onclick="switchTab('cust','project')"><span class="icon"><i class="fa-solid fa-clipboard-list"></i></span> Add Project</div>
+      <div class="sidebar-link" onclick="switchTab('cust','materials')"><span class="icon"><i class="fa-regular fa-trowel-bricks"></i></span> Buy Materials</div>
+      <div class="sidebar-link" onclick="switchTab('cust','profile')"><span class="icon"><i class="fas fa-user"></i></span> Edit Profile</div>
+    </div>
+    <div class="dash-main">
+
+      <!-- Overview Tab -->
+      <div class="dash-tab active" id="cust-tab-overview">
+        <div class="profile-banner">
+          <div class="profile-big-avatar" id="cust-avatar-banner">C</div>
+          <div>
+            <h2 style="font-family:'Barlow Condensed',sans-serif;font-size:24px;font-weight:800" id="cust-banner-name">Welcome!</h2>
+            <p style="color:rgba(255,255,255,0.7);font-size:14px" id="cust-banner-location">Kampala, Uganda</p>
+          </div>
+        </div>
+        <div class="grid-3">
+          <div class="card" style="cursor:pointer" onclick="switchTab('cust','project')">
+            <div class="card-body text-center">
+              <div style="font-size:36px;margin-bottom:0.5rem"><i class="fa-solid fa-clipboard-list"></div>
+              <h4 style="font-weight:800">Post a Project</h4>
+              <p style="font-size:13px;color:var(--text-soft);margin-top:4px">Find the right artisan for your job</p>
+            </div>
+          </div>
+          <div class="card" style="cursor:pointer" onclick="switchTab('cust','materials')">
+            <div class="card-body text-center">
+              <div style="font-size:36px;margin-bottom:0.5rem"><i class="fa-regular fa-trowel-bricks"></i></div>
+              <h4 style="font-weight:800">Buy Materials</h4>
+              <p style="font-size:13px;color:var(--text-soft);margin-top:4px">Browse hardware and building supplies</p>
+            </div>
+          </div>
+          <div class="card" style="cursor:pointer" onclick="switchTab('cust','profile')">
+            <div class="card-body text-center">
+              <div style="font-size:36px;margin-bottom:0.5rem"><i class="fas fa-user"></div>
+              <h4 style="font-weight:800">Edit Profile</h4>
+              <p style="font-size:13px;color:var(--text-soft);margin-top:4px">Update your details and photo</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Add Project Tab -->
+      <div class="dash-tab" id="cust-tab-project">
+        <div class="page-heading">Find an Artisan</div>
+        <div class="card mb-2">
+          <div class="card-body">
+            <div class="grid-2">
+              <div class="form-group">
+                <label>Project Location</label>
+                <input class="form-control" id="proj-location" placeholder="e.g. Ntinda, Kampala">
+              </div>
+              <div class="form-group">
+                <label>Type of Artisan Needed</label>
+                <select class="form-control" id="proj-trade" onchange="loadArtisans()">
+                  <option value="">Select trade</option>
+                  <option>Plumber</option><option>Electrician</option><option>Builder / Mason</option>
+                  <option>Welder</option><option>Carpenter</option><option>Painter</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="artisan-results"></div>
+      </div>
+
+      <!-- Materials Tab -->
+      <div class="dash-tab" id="cust-tab-materials">
+        <div class="page-heading">Building Materials & Tools</div>
+        <div class="alert alert-navy">
+          <span>🧱</span>
+          Browse verified hardware suppliers across Uganda. Add items to cart and place your order directly.
+        </div>
+        <button class="btn btn-orange mb-2" onclick="goTo('shop')">Open Materials Shop →</button>
+      </div>
+
+      <!-- Edit Profile Tab -->
+      <div class="dash-tab" id="cust-tab-profile">
+        <div class="page-heading">Edit Profile</div>
+        <div class="card" style="max-width:520px">
+          <div class="card-body">
+            <div class="form-group">
+              <label>Profile Picture</label>
+              <div class="upload-zone" onclick="document.getElementById('cust-pic-input').click()">
+                <input type="file" id="cust-pic-input" accept="image/*" onchange="previewProfilePic('cust-pic-input','cust-pic-preview','cust-avatar-banner','cust-nav-init')">
+                <div class="uz-icon">📷</div>
+                <p>Click to upload profile picture</p>
+              </div>
+              <div id="cust-pic-preview" style="margin-top:0.75rem;display:none">
+                <img id="cust-pic-img" style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:3px solid var(--orange)">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Additional Phone Number</label>
+              <input class="form-control" id="cust-extra-phone" placeholder="e.g. 0712345678">
+            </div>
+            <button class="btn btn-orange" onclick="saveProfile('customer')">Save Profile</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- /customer -->
+
+<!-- ════════════════════════════════════════════════════
+     ARTISAN DASHBOARD
+════════════════════════════════════════════════════ -->
+<div class="page" id="page-artisan">
+  <div class="dash-layout">
+    <div class="dash-sidebar">
+      <div class="dash-sidebar-name">
+        <h3 id="art-sidebar-name">My Account</h3>
+        <p id="art-sidebar-trade">Artisan</p>
+      </div>
+      <div class="sidebar-link active" onclick="switchTab('art','overview')"><span class="icon">🏠</span> Overview</div>
+      <div class="sidebar-link" onclick="switchTab('art','teamup')"><span class="icon">🤝</span> Team Up</div>
+      <div class="sidebar-link" onclick="switchTab('art','invite')"><span class="icon">📨</span> Invite Artisan</div>
+      <div class="sidebar-link" onclick="switchTab('art','materials')"><span class="icon">🧱</span> Buy Materials</div>
+      <div class="sidebar-link" onclick="switchTab('art','profile')"><span class="icon">👤</span> Edit Profile</div>
+    </div>
+    <div class="dash-main">
+
+      <!-- Overview Tab -->
+      <div class="dash-tab active" id="art-tab-overview">
+        <div id="art-setup-alert" class="alert alert-orange" style="display:none">
+          <span>⚠️</span>
+          <span>Finish setting up your profile to start receiving jobs.</span>
+          <button class="btn btn-orange btn-sm" style="margin-left:auto" onclick="switchTab('art','profile')">Finish →</button>
+        </div>
+        <div class="profile-banner">
+          <div class="profile-big-avatar" id="art-avatar-banner">A</div>
+          <div style="flex:1">
+            <h2 style="font-family:'Barlow Condensed',sans-serif;font-size:24px;font-weight:800" id="art-banner-name">Welcome!</h2>
+            <p style="color:rgba(255,255,255,0.7);font-size:14px" id="art-banner-trade">Artisan</p>
+            <div style="margin-top:0.75rem" id="art-status-wrap">
+              <button class="btn btn-sm" id="art-status-btn" onclick="toggleArtisanStatus()" style="background:var(--orange);color:white">Set Status</button>
+            </div>
+          </div>
+        </div>
+        <div class="grid-3">
+          <div class="card" style="cursor:pointer" onclick="switchTab('art','teamup')">
+            <div class="card-body text-center">
+              <div style="font-size:36px;margin-bottom:0.5rem">🤝</div>
+              <h4 style="font-weight:800">Team Up</h4>
+              <p style="font-size:13px;color:var(--text-soft);margin-top:4px">Find fellow artisans to collaborate with</p>
+            </div>
+          </div>
+          <div class="card" style="cursor:pointer" onclick="switchTab('art','invite')">
+            <div class="card-body text-center">
+              <div style="font-size:36px;margin-bottom:0.5rem">📨</div>
+              <h4 style="font-weight:800">Invite Artisan</h4>
+              <p style="font-size:13px;color:var(--text-soft);margin-top:4px">Bring more skilled people on board</p>
+            </div>
+          </div>
+          <div class="card" style="cursor:pointer" onclick="switchTab('art','profile')">
+            <div class="card-body text-center">
+              <div style="font-size:36px;margin-bottom:0.5rem">👤</div>
+              <h4 style="font-weight:800">Edit Profile</h4>
+              <p style="font-size:13px;color:var(--text-soft);margin-top:4px">Update portfolio and availability</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Team Up Tab -->
+      <div class="dash-tab" id="art-tab-teamup">
+        <div class="page-heading">Team Up with Artisans</div>
+        <div class="form-group" style="max-width:300px">
+          <label>Filter by Trade</label>
+          <select class="form-control" id="teamup-trade" onchange="loadTeamupArtisans()">
+            <option value="">All Trades</option>
+            <option>Plumber</option><option>Electrician</option><option>Builder / Mason</option>
+            <option>Welder</option><option>Carpenter</option><option>Painter</option>
+          </select>
+        </div>
+        <div id="teamup-results"></div>
+      </div>
+
+      <!-- Invite Tab -->
+      <div class="dash-tab" id="art-tab-invite">
+        <div class="page-heading">Invite a Fellow Artisan</div>
+        <div class="card" style="max-width:480px">
+          <div class="card-body">
+            <p style="font-size:14px;color:var(--text-soft);margin-bottom:1.5rem;line-height:1.6">Know a skilled artisan who should be on BuildEasy? Invite them via WhatsApp — they'll receive a direct link to sign up.</p>
+            <div class="form-group">
+              <label>Artisan's WhatsApp Number *</label>
+              <input class="form-control" id="invite-phone" placeholder="e.g. 0781234567">
+            </div>
+            <div class="form-group">
+              <label>Their Name (optional)</label>
+              <input class="form-control" id="invite-name" placeholder="e.g. Peter Kato">
+            </div>
+            <button class="btn btn-orange" onclick="sendInvite()">Send Invite via WhatsApp</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Materials Tab -->
+      <div class="dash-tab" id="art-tab-materials">
+        <div class="page-heading">Building Materials & Tools</div>
+        <div class="alert alert-navy"><span>🧱</span> Source quality materials from verified Ugandan suppliers.</div>
+        <button class="btn btn-orange" onclick="goTo('shop')">Open Materials Shop →</button>
+      </div>
+
+      <!-- Edit Profile Tab -->
+      <div class="dash-tab" id="art-tab-profile">
+        <div class="page-heading">Edit Profile</div>
+        <div class="card" style="max-width:560px">
+          <div class="card-body">
+            <div class="form-group">
+              <label>Profile Picture</label>
+              <div class="upload-zone" onclick="document.getElementById('art-pic-input').click()">
+                <input type="file" id="art-pic-input" accept="image/*" onchange="previewProfilePic('art-pic-input','art-pic-preview','art-avatar-banner','art-nav-init')">
+                <div class="uz-icon">📷</div><p>Click to upload profile picture</p>
+              </div>
+              <div id="art-pic-preview" style="margin-top:0.75rem;display:none">
+                <img id="art-pic-img" style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:3px solid var(--orange)">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Years of Experience</label>
+              <select class="form-control" id="art-experience">
+                <option value="">Select</option>
+                <option>Less than 1 year</option><option>1–3 years</option>
+                <option>3–5 years</option><option>5–10 years</option><option>10+ years</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Availability Status</label>
+              <select class="form-control" id="art-status-select">
+                <option value="Free for Work">🟢 Free for Work</option>
+                <option value="Busy">🔴 Busy</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Past Works / Portfolio (upload images)</label>
+              <div class="upload-zone" onclick="document.getElementById('art-portfolio-input').click()">
+                <input type="file" id="art-portfolio-input" accept="image/*" multiple onchange="addPortfolioImages()">
+                <div class="uz-icon">🖼️</div><p>Click to upload past work images (multiple)</p>
+              </div>
+              <div class="uploaded-img-row" id="art-portfolio-row"></div>
+            </div>
+            <button class="btn btn-orange" onclick="saveArtisanProfile()">Save Profile</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- /artisan -->
+
+<!-- ════════════════════════════════════════════════════
+     HARDWARE DASHBOARD
+════════════════════════════════════════════════════ -->
+<div class="page" id="page-hardware">
+  <div class="dash-layout">
+    <div class="dash-sidebar">
+      <div class="dash-sidebar-name">
+        <h3 id="hw-sidebar-name">My Store</h3>
+        <p>Hardware Supplier</p>
+      </div>
+      <div class="sidebar-link active" onclick="switchTab('hw','overview')"><span class="icon">🏠</span> Overview</div>
+      <div class="sidebar-link" onclick="switchTab('hw','products')"><span class="icon">📦</span> My Products</div>
+      <div class="sidebar-link" onclick="switchTab('hw','add-product')"><span class="icon">➕</span> Add Product</div>
+      <div class="sidebar-link" onclick="switchTab('hw','profile')"><span class="icon">🏪</span> Edit Store Profile</div>
+    </div>
+    <div class="dash-main">
+
+      <!-- Overview Tab -->
+      <div class="dash-tab active" id="hw-tab-overview">
+        <div id="hw-setup-alert" class="alert alert-orange" style="display:none">
+          <span>⚠️</span>
+          <span>Finish setting up your store profile to start listing products.</span>
+          <button class="btn btn-orange btn-sm" style="margin-left:auto" onclick="switchTab('hw','profile')">Finish →</button>
+        </div>
+        <div class="profile-banner">
+          <div class="profile-big-avatar" id="hw-avatar-banner">H</div>
+          <div>
+            <h2 style="font-family:'Barlow Condensed',sans-serif;font-size:24px;font-weight:800" id="hw-banner-name">My Store</h2>
+            <p style="color:rgba(255,255,255,0.7);font-size:14px" id="hw-banner-location">Hardware Supplier</p>
+          </div>
+        </div>
+        <div class="grid-3">
+          <div class="card" style="cursor:pointer" onclick="switchTab('hw','add-product')">
+            <div class="card-body text-center">
+              <div style="font-size:36px;margin-bottom:0.5rem">➕</div>
+              <h4 style="font-weight:800">Add Product</h4>
+              <p style="font-size:13px;color:var(--text-soft);margin-top:4px">List a new item for buyers to find</p>
+            </div>
+          </div>
+          <div class="card" style="cursor:pointer" onclick="switchTab('hw','products')">
+            <div class="card-body text-center">
+              <div style="font-size:36px;margin-bottom:0.5rem">📦</div>
+              <h4 style="font-weight:800">My Products</h4>
+              <p style="font-size:13px;color:var(--text-soft);margin-top:4px">Manage your inventory and stock</p>
+            </div>
+          </div>
+          <div class="card" style="cursor:pointer" onclick="switchTab('hw','profile')">
+            <div class="card-body text-center">
+              <div style="font-size:36px;margin-bottom:0.5rem">🏪</div>
+              <h4 style="font-weight:800">Store Profile</h4>
+              <p style="font-size:13px;color:var(--text-soft);margin-top:4px">Edit store name and details</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- My Products Tab -->
+      <div class="dash-tab" id="hw-tab-products">
+        <div class="page-heading">My Products</div>
+        <div id="hw-products-list"></div>
+      </div>
+
+      <!-- Add Product Tab -->
+      <div class="dash-tab" id="hw-tab-add-product">
+        <div class="page-heading">Add New Product</div>
+        <div class="card" style="max-width:560px">
+          <div class="card-body">
+            <div class="form-group">
+              <label>Product Image</label>
+              <div class="upload-zone" onclick="document.getElementById('prod-img-input').click()">
+                <input type="file" id="prod-img-input" accept="image/*" onchange="previewProductImg()">
+                <div class="uz-icon">📷</div><p>Click to upload product image</p>
+              </div>
+              <div id="prod-img-preview" style="margin-top:0.75rem;display:none">
+                <img id="prod-img-thumb" style="width:100px;height:100px;border-radius:10px;object-fit:cover;border:2px solid var(--border)">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Product Name *</label>
+              <input class="form-control" id="prod-name" placeholder="e.g. Portland Cement 50kg">
+            </div>
+            <div class="form-group">
+              <label>Description</label>
+              <textarea class="form-control" id="prod-desc" placeholder="Brief description of the product, specifications, brand..."></textarea>
+            </div>
+            <div class="form-group">
+              <label>Price (UGX) *</label>
+              <input class="form-control" id="prod-price" type="number" placeholder="e.g. 35000">
+            </div>
+            <div class="form-group">
+              <label>Terms of Delivery</label>
+              <select class="form-control" id="prod-delivery">
+                <option>Free Delivery</option>
+                <option>Delivery on Client's Bill</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Terms of Purchase</label>
+              <select class="form-control" id="prod-payment">
+                <option>Pay Before Delivery</option>
+                <option>Pay After Delivery</option>
+                <option>Partial Payment Before Delivery</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Stock Status</label>
+              <select class="form-control" id="prod-stock">
+                <option value="In Stock">In Stock</option>
+                <option value="Out of Stock">Out of Stock</option>
+              </select>
+            </div>
+            <button class="btn btn-orange" onclick="addProduct()">Add Product to Store</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Store Profile Tab -->
+      <div class="dash-tab" id="hw-tab-profile">
+        <div class="page-heading">Edit Store Profile</div>
+        <div class="card" style="max-width:480px">
+          <div class="card-body">
+            <div class="form-group">
+              <label>Store / Business Name *</label>
+              <input class="form-control" id="hw-biz-name" placeholder="e.g. Ssekandi Hardware Ltd">
+            </div>
+            <div class="form-group">
+              <label>Store Logo / Profile Picture</label>
+              <div class="upload-zone" onclick="document.getElementById('hw-pic-input').click()">
+                <input type="file" id="hw-pic-input" accept="image/*" onchange="previewProfilePic('hw-pic-input','hw-pic-preview','hw-avatar-banner','hw-nav-init')">
+                <div class="uz-icon">🏪</div><p>Click to upload store logo</p>
+              </div>
+              <div id="hw-pic-preview" style="margin-top:0.75rem;display:none">
+                <img id="hw-pic-img" style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:3px solid var(--orange)">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Branch Locations (separate with comma)</label>
+              <input class="form-control" id="hw-branches" placeholder="e.g. Kampala, Mukono, Jinja">
+            </div>
+            <button class="btn btn-orange" onclick="saveHardwareProfile()">Save Store Profile</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- /hardware -->
+
+<!-- ════════════════════════════════════════════════════
+     SHOP PAGE
+════════════════════════════════════════════════════ -->
+<div class="page" id="page-shop">
+  <div class="section" style="min-height:calc(100vh - 64px);background:var(--surface)">
+    <div class="container">
+      <div class="flex-between mb-2" style="flex-wrap:wrap;gap:1rem">
+        <div>
+          <div class="section-label">Materials & Tools</div>
+          <div class="section-title" style="margin-bottom:0">Building Materials Shop</div>
+        </div>
+        <button class="btn btn-outline" onclick="goToDashboard()">← Back to Dashboard</button>
+      </div>
+      <div class="alert alert-navy mt-2">
+        <span>🧱</span> Browse verified hardware suppliers across Uganda. Add items to cart, then place your order — the supplier is notified via WhatsApp.
+      </div>
+      <div class="search-wrap mt-3">
+        <span class="search-icon">🔍</span>
+        <input class="form-control" id="shop-search" placeholder="Search products (e.g. cement, tiles, timber...)" oninput="renderShop()">
+      </div>
+      <div class="grid-4" id="shop-products"></div>
+      <div id="shop-empty" style="text-align:center;padding:3rem;display:none">
+        <div style="font-size:48px;margin-bottom:1rem">🧱</div>
+        <h3 style="font-weight:800;color:var(--navy)">No products yet</h3>
+        <p style="color:var(--text-soft);margin-top:0.5rem">Hardware suppliers will list their products here. Check back soon!</p>
+      </div>
+    </div>
+  </div>
+</div><!-- /shop -->
+
+<!-- ════════════════════════════════════════════════════
+     CART PAGE
+════════════════════════════════════════════════════ -->
+<div class="page" id="page-cart">
+  <div class="section" style="min-height:calc(100vh - 64px);background:var(--surface)">
+    <div class="container" style="max-width:760px">
+      <div class="flex-between mb-2">
+        <div class="section-title" style="margin:0">🛒 Your Cart</div>
+        <button class="btn btn-outline" onclick="goTo('shop')">← Continue Shopping</button>
+      </div>
+      <div id="cart-items-list"></div>
+      <div id="cart-empty" style="text-align:center;padding:3rem;display:none">
+        <div style="font-size:48px;margin-bottom:1rem">🛒</div>
+        <h3 style="font-weight:800;color:var(--navy)">Your cart is empty</h3>
+        <p style="color:var(--text-soft);margin-top:0.5rem;margin-bottom:1.5rem">Browse the materials shop and add items</p>
+        <button class="btn btn-orange" onclick="goTo('shop')">Browse Materials</button>
+      </div>
+      <div id="cart-summary" style="display:none">
+        <div class="card">
+          <div class="card-body">
+            <div class="flex-between" style="margin-bottom:1rem">
+              <span style="font-size:16px;font-weight:700">Total Amount</span>
+              <span style="font-size:22px;font-weight:800;color:var(--orange)" id="cart-total">UGX 0</span>
+            </div>
+            <button class="btn btn-orange btn-full" style="padding:14px;font-size:16px" onclick="placeOrder()">Place Order via WhatsApp</button>
+            <p style="text-align:center;font-size:12px;color:var(--text-soft);margin-top:0.75rem">Your order details will be sent to the hardware supplier's WhatsApp inbox</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- /cart -->
+
+<!-- ════════════════════════════════════════════════════
+     MODALS
+════════════════════════════════════════════════════ -->
+
+<!-- Artisan Detail Modal -->
+<div class="modal-overlay" id="artisan-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="amodal-name">Artisan Profile</div>
+      <button class="modal-close" onclick="closeModal('artisan-modal')">✕</button>
+    </div>
+    <div style="text-align:center;margin-bottom:1.5rem">
+      <div class="profile-big-avatar" id="amodal-avatar" style="width:80px;height:80px;margin:0 auto 1rem;font-size:28px"></div>
+      <div id="amodal-status"></div>
+    </div>
+    <div id="amodal-details"></div>
+    <div style="margin-top:1.5rem">
+      <button class="btn btn-orange btn-full" id="amodal-book-btn" style="padding:14px;font-size:16px">📞 Book via WhatsApp</button>
+    </div>
+  </div>
+</div>
+
+<!-- Review Modal -->
+<div class="modal-overlay" id="review-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Leave a Review</div>
+      <button class="modal-close" onclick="closeModal('review-modal')">✕</button>
+    </div>
+    <div class="form-group">
+      <label>Your Name</label>
+      <input class="form-control" id="rev-name" placeholder="e.g. John Ssekandi">
+    </div>
+    <div class="form-group">
+      <label>Your Role</label>
+      <select class="form-control" id="rev-role">
+        <option>Homeowner / Client</option>
+        <option>Artisan / Contractor</option>
+        <option>Hardware Supplier</option>
+        <option>Visitor</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Your Review / Suggestion</label>
+      <textarea class="form-control" id="rev-text" placeholder="What would make BuildEasy better for you?"></textarea>
+    </div>
+    <button class="btn btn-orange btn-full mt-2" onclick="submitReview()">Submit Review</button>
+  </div>
+</div>
+
+<!-- Customer Care Modal -->
+<div class="modal-overlay" id="care-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Customer Care</div>
+      <button class="modal-close" onclick="closeModal('care-modal')">✕</button>
+    </div>
+    <p style="font-size:14px;color:var(--text-soft);margin-bottom:1.5rem">Fill in your details and complaint below. Your message will be sent directly to our support team.</p>
+    <div class="form-group">
+      <label>Full Name *</label>
+      <input class="form-control" id="care-name" placeholder="Your full name">
+    </div>
+    <div class="form-group">
+      <label>Contact (Phone / WhatsApp) *</label>
+      <input class="form-control" id="care-contact" placeholder="e.g. 0701234567">
+    </div>
+    <div class="form-group">
+      <label>Complaint / Issue *</label>
+      <textarea class="form-control" id="care-complaint" placeholder="Describe your issue or complaint..."></textarea>
+    </div>
+    <button class="btn btn-orange btn-full mt-2" onclick="submitCare()">Send to Support Team</button>
+  </div>
+</div>
+
+<!-- Research Modal -->
+<div class="modal-overlay" id="research-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="research-modal-title">Research Survey</div>
+      <button class="modal-close" onclick="closeModal('research-modal')">✕</button>
+    </div>
+    <div id="research-form"></div>
+    <button class="btn btn-navy btn-full mt-3" onclick="submitResearch()">Submit Survey</button>
+  </div>
+</div>
+
+<!-- Product Detail Modal -->
+<div class="modal-overlay" id="product-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="pmodal-name">Product</div>
+      <button class="modal-close" onclick="closeModal('product-modal')">✕</button>
+    </div>
+    <div id="pmodal-body"></div>
+    <button class="btn btn-orange btn-full mt-3" onclick="addToCartFromModal()">Add to Cart</button>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     FIREBASE SDK (v9 compat)
+═══════════════════════════════════════════════════════════ -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
+
+<!-- ═══ JAVASCRIPT ═══════════════════════════════════════════ -->
+<script src="index.js"></script>
+</body>
+</html>
